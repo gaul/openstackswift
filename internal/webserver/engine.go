@@ -74,6 +74,9 @@ func EchoEngine(ctrl Controller) *echo.Echo {
 	//
 
 	swift := router.Group("/v1/AUTH_" + ctrl.Username)
+	// Echo routes on the escaped URL and does not unescape captured params, so
+	// percent-decode container/object names before the handlers consume them.
+	swift.Use(middlewarepkg.DecodePathParams())
 	auth := middlewarepkg.Authenticate(CraftToken(ctrl.Username))
 
 	// Container
