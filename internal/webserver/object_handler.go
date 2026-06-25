@@ -3,8 +3,8 @@ package webserver
 import (
 	"io"
 	"net/http"
-	"strings"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -20,10 +20,9 @@ import (
 
 type object struct {
 	logger  logger.Logger
-	db		database.Client
+	db      database.Client
 	storage storage.Backend
 }
-
 
 func (h *object) setHeadersFromMeta(c echo.Context, metas []*model.Meta) error {
 	for _, meta := range metas {
@@ -44,6 +43,21 @@ func (h *object) storeObjectMeta(c echo.Context, containerID, objectKey string) 
 		}
 	}
 	return nil
+}
+
+// setContentHeaders returns the optional content-metadata headers stored with
+// the object (Content-Disposition, Content-Encoding), omitting any that are
+// unset.
+func (h *object) setContentHeaders(c echo.Context, object *model.Object) {
+	if object == nil {
+		return
+	}
+	if object.ContentDisposition != "" {
+		c.Response().Header().Set("Content-Disposition", object.ContentDisposition)
+	}
+	if object.ContentEncoding != "" {
+		c.Response().Header().Set("Content-Encoding", object.ContentEncoding)
+	}
 }
 
 func (h *object) Show(c echo.Context) error {
@@ -79,6 +93,7 @@ func (h *object) Show(c echo.Context) error {
 	c.Response().Header().Set("Date", time.Now().UTC().Format(http.TimeFormat))
 	c.Response().Header().Set("X-Timestamp", strconv.FormatInt(object.CreatedAt.Unix(), 10))
 	c.Response().Header().Set("Content-Type", object.ContentType)
+	h.setContentHeaders(c, object)
 	c.Response().Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
 	c.Response().Header().Set("Etag", object.Checksum)
 	if !object.TTL.IsZero() {
@@ -121,6 +136,7 @@ func (h *object) Download(c echo.Context) error {
 	c.Response().Header().Set("Content-Type", downloader.ContentType())
 	c.Response().Header().Set("Etag", downloader.Checksum())
 	h.setHeadersFromMeta(c, metas)
+	h.setContentHeaders(c, object)
 	if object != nil && !object.TTL.IsZero() {
 		c.Response().Header().Set("X-Delete-At", strconv.FormatInt(object.TTL.Unix(), 10))
 	}
@@ -182,8 +198,6 @@ func (h *object) Update(c echo.Context) error {
 	return c.NoContent(http.StatusAccepted)
 }
 
-
-
 func (h *object) Upload(c echo.Context) error {
 	c.Set("handler_method", "object.Upload")
 
@@ -206,6 +220,8 @@ func (h *object) Upload(c echo.Context) error {
 	if object.ContentType == "" {
 		object.ContentType = echo.MIMEOctetStream
 	}
+	object.ContentDisposition = c.Request().Header.Get("Content-Disposition")
+	object.ContentEncoding = c.Request().Header.Get("Content-Encoding")
 	err = service.SetupObjectTTL(object, c.Request())
 	if err != nil {
 		return weberror.New(http.StatusInternalServerError, err.Error())
