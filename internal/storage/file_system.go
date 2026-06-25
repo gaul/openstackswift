@@ -26,7 +26,11 @@ func (b *fs) Name() string {
 }
 
 func (b *fs) Reader(container, object string) (io.ReadCloser, error) {
-	rc, err := os.Open(filepath.Join(b.workspace, container, object))
+	p, err := b.objectPath(container, object)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := os.Open(p)
 	if err != nil {
 		return rc, errors.Wrap(err, "could not open file")
 	}
@@ -34,9 +38,15 @@ func (b *fs) Reader(container, object string) (io.ReadCloser, error) {
 }
 
 func (b *fs) Writer(container, object string) (io.WriteCloser, error) {
-	b.mkdirAllWithFilename(container, object)
+	p, err := b.objectPath(container, object)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return nil, errors.Wrap(err, "could not create directory")
+	}
 
-	wc, err := os.Create(filepath.Join(b.workspace, container, object))
+	wc, err := os.Create(p)
 	if err != nil {
 		return wc, errors.Wrap(err, "could not create file")
 	}
@@ -44,7 +54,11 @@ func (b *fs) Writer(container, object string) (io.WriteCloser, error) {
 }
 
 func (b *fs) Copy(sc, so, dc, do string) error {
-	src, err := os.Open(filepath.Join(b.workspace, sc, so))
+	srcPath, err := b.objectPath(sc, so)
+	if err != nil {
+		return errors.Wrap(err, "copy: source")
+	}
+	src, err := os.Open(srcPath)
 	if err != nil {
 		return errors.Wrap(err, "copy: source")
 	}
@@ -52,9 +66,15 @@ func (b *fs) Copy(sc, so, dc, do string) error {
 
 	//
 
-	b.mkdirAllWithFilename(dc, do)
+	dstPath, err := b.objectPath(dc, do)
+	if err != nil {
+		return errors.Wrap(err, "copy: destination")
+	}
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		return errors.Wrap(err, "copy: destination")
+	}
 
-	dst, err := os.Create(filepath.Join(b.workspace, dc, do))
+	dst, err := os.Create(dstPath)
 	if err != nil {
 		return errors.Wrap(err, "copy: destination")
 	}
@@ -72,7 +92,11 @@ func (b *fs) Copy(sc, so, dc, do string) error {
 }
 
 func (b *fs) FilenamesFrom(prefix string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(b.workspace, prefix))
+	p, err := secureJoin(b.workspace, prefix)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(p)
 	if err != nil {
 		return nil, err
 	}
@@ -89,27 +113,19 @@ func (b *fs) FilenamesFrom(prefix string) ([]string, error) {
 	return filenames, nil
 }
 
-func (b *fs) Exist(container, object string) bool {
-	_, err := os.Stat(filepath.Join(b.workspace, container, object))
-	if err == nil {
-		return true
+func (b *fs) Remove(container, object string) error {
+	p, err := b.objectPath(container, object)
+	if err != nil {
+		return errors.Wrap(err, "could not delete file")
 	}
-	if os.IsNotExist(err) {
-		return false
+	if err := os.RemoveAll(p); err != nil {
+		return errors.Wrap(err, "could not delete file")
 	}
-	return true // ignoring error
+	return nil
 }
 
 func (b *fs) RemoveAll(path string) error {
 	return b.Remove(path, "")
-}
-
-func (b *fs) Remove(container, object string) error {
-	err := os.RemoveAll(filepath.Join(b.workspace, container, object))
-	if err != nil {
-		return errors.Wrap(err, "could not delete file")
-	}
-	return nil
 }
 
 func (b *fs) Cleanup() error {
@@ -159,12 +175,25 @@ func (b *fs) Cleanup() error {
 	return nil
 }
 
-func (b *fs) mkdirAllWithFilename(container, object string) {
-	b.mkdirAll(container, filepath.Dir(object))
+// objectPath resolves the on-disk path for an object, ensuring neither the
+// container nor the object name escapes the container directory via "../"
+// traversal.  Object names legitimately contain "/" (pseudo-directories), so
+// only escapes beyond the container root are rejected.
+func (b *fs) objectPath(container, object string) (string, error) {
+	root, err := secureJoin(b.workspace, container)
+	if err != nil {
+		return "", err
+	}
+	return secureJoin(root, object)
 }
 
-func (b *fs) mkdirAll(container, object string) {
-	if !b.Exist(container, object) {
-		os.MkdirAll(filepath.Join(b.workspace, container, object), 0755)
+// secureJoin joins name onto root and verifies the cleaned result stays within
+// root, guarding against "../" path traversal in untrusted container and object
+// names.
+func secureJoin(root, name string) (string, error) {
+	p := filepath.Join(root, name)
+	if p != root && !strings.HasPrefix(p, root+string(os.PathSeparator)) {
+		return "", errors.Errorf("invalid path: %q escapes %q", name, root)
 	}
+	return p, nil
 }
