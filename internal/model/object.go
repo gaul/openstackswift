@@ -9,9 +9,11 @@ type Object struct {
 	ContainerID string `json:"container_id" storm:"index"`
 	ManifestID  string `json:"manifest_id"  storm:"index"`
 
-	Key         string    `json:"key"          storm:"index"`
-	Size        int64     `json:"size"`
-	ContentType string    `json:"content_type"`
-	Checksum    string    `json:"checksum"`
-	TTL         time.Time `json:"ttl"          storm:"index"`
+	Key                string    `json:"key"          storm:"index"`
+	Size               int64     `json:"size"`
+	ContentType        string    `json:"content_type"`
+	ContentDisposition string    `json:"content_disposition"`
+	ContentEncoding    string    `json:"content_encoding"`
+	Checksum           string    `json:"checksum"`
+	TTL                time.Time `json:"ttl"          storm:"index"`
 }

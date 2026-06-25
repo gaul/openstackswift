@@ -56,6 +56,8 @@ func (s *ObjectCopier) Copy(containername, objectname string) error {
 	object.ContainerID = container.ID
 	object.Key = objectname
 	object.ContentType = s.object.ContentType
+	object.ContentDisposition = s.object.ContentDisposition
+	object.ContentEncoding = s.object.ContentEncoding
 	object.Checksum = s.object.Checksum
 	object.Size = s.object.Size
 
