@@ -31,7 +31,9 @@ type Controller struct {
 func EchoEngine(ctrl Controller) *echo.Echo {
 	engine := echo.New()
 	// engine.Use(middleware.Recover())
-	engine.Use(middleware.Gzip())
+	// Note: do NOT gzip responses.  Swift object bodies must be served
+	// verbatim; compressing them rewrites Content-Length (and clients that
+	// transparently decompress then drop it), and it defeats Range requests.
 	engine.Use(middlewarepkg.Logger(ctrl.Logger))
 	// engine.Use(middlewarepkg.Dumpper())
 
