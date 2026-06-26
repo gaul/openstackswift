@@ -112,6 +112,53 @@ func (s *ManifestDownloader) Checksum() string {
 //-----
 //
 
+// StaticObjectDownloader streams a Static Large Object (SLO) by concatenating
+// its explicit, ordered segment list.
+type StaticObjectDownloader struct {
+	storage storage.Backend
+	object  *model.Object
+}
+
+func NewStaticObjectDownloader(storage storage.Backend, object *model.Object) Downloader {
+	return &StaticObjectDownloader{
+		storage: storage,
+		object:  object,
+	}
+}
+
+func (s *StaticObjectDownloader) Stream() (io.ReadCloser, error) {
+	reader := &mreader{}
+	var readers []io.Reader
+	for _, segment := range s.object.Segments {
+		r, err := s.storage.Reader(segment.Container, segment.Object)
+		if err != nil {
+			reader.Close()
+			return nil, errors.Wrap(err, "StaticObjectDownloader")
+		}
+		readers = append(readers, r)
+		reader.closers = append(reader.closers, r)
+	}
+
+	reader.Reader = io.MultiReader(readers...)
+	return reader, nil
+}
+
+func (s *StaticObjectDownloader) ContentType() string {
+	return s.object.ContentType
+}
+
+func (s *StaticObjectDownloader) Size() int64 {
+	return s.object.Size
+}
+
+func (s *StaticObjectDownloader) Checksum() string {
+	return s.object.Checksum
+}
+
+//
+//-----
+//
+
 type mreader struct {
 	io.Reader
 	closers []io.Closer

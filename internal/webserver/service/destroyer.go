@@ -136,3 +136,73 @@ func (s *ManifestDestroyer) Destroy() error {
 	err = s.database.DeleteManifest(s.manifest.ID)
 	return errors.Wrap(err, "ManifestDestroyer manifest")
 }
+
+//
+//-----
+//
+
+// A StaticObjectDestroyer removes a Static Large Object (SLO) manifest.  When
+// withSegments is set (DELETE ...?multipart-manifest=delete) it also removes the
+// referenced segment objects; otherwise the segments are left in place, matching
+// Swift, where a plain DELETE removes only the manifest.
+type StaticObjectDestroyer struct {
+	database     database.Client
+	storage      storage.Backend
+	container    *model.Container
+	object       *model.Object
+	withSegments bool
+}
+
+// NewStaticObjectDestroyer returns a new StaticObjectDestroyer.
+func NewStaticObjectDestroyer(database database.Client, storage storage.Backend, container *model.Container, object *model.Object, withSegments bool) Destroyer {
+	return &StaticObjectDestroyer{
+		database:     database,
+		storage:      storage,
+		container:    container,
+		object:       object,
+		withSegments: withSegments,
+	}
+}
+
+func (s *StaticObjectDestroyer) Destroy() error {
+	if s.withSegments {
+		for _, segment := range s.object.Segments {
+			container, err := s.database.FindContainerByName(segment.Container)
+			if err != nil {
+				if s.database.IsNotFound(err) {
+					continue
+				}
+				return errors.Wrap(err, "StaticObjectDestroyer find container")
+			}
+
+			if err = s.storage.Remove(segment.Container, segment.Object); err != nil {
+				return errors.Wrap(err, "StaticObjectDestroyer storage")
+			}
+
+			object, err := s.database.FindObjectByKey(container.ID, segment.Object)
+			if err != nil {
+				if s.database.IsNotFound(err) {
+					continue
+				}
+				return errors.Wrap(err, "StaticObjectDestroyer find object")
+			}
+
+			err = s.database.DeleteAllMetas(container.ID, segment.Object)
+			if err != nil && !s.database.IsNotFound(err) {
+				return errors.Wrap(err, "StaticObjectDestroyer meta")
+			}
+
+			if err = s.database.DeleteObject(object.ID); err != nil {
+				return errors.Wrap(err, "StaticObjectDestroyer object")
+			}
+		}
+	}
+
+	// The manifest object has no backing file, so only its records are removed.
+	err := s.database.DeleteAllMetas(s.container.ID, s.object.Key)
+	if err != nil && !s.database.IsNotFound(err) {
+		return errors.Wrap(err, "StaticObjectDestroyer meta")
+	}
+
+	return errors.Wrap(s.database.DeleteObject(s.object.ID), "StaticObjectDestroyer object")
+}

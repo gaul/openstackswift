@@ -191,3 +191,90 @@ func (s *ManifestCopier) CreatedAt() time.Time {
 func (s *ManifestCopier) Checksum() string {
 	return s.object.Checksum
 }
+
+//
+//-----
+//
+
+// A StaticObjectCopier handles the copy of a Static Large Object (SLO).  As with
+// a dynamic manifest, copying produces a normal object whose content is the
+// concatenation of the source segments rather than a new manifest.
+// https://docs.openstack.org/swift/latest/api/large_objects.html
+type StaticObjectCopier struct {
+	database  database.Client
+	storage   storage.Backend
+	container *model.Container
+	source    *model.Object
+	object    *model.Object
+}
+
+// NewStaticObjectCopier returns a new StaticObjectCopier.
+func NewStaticObjectCopier(database database.Client, storage storage.Backend, container *model.Container, object *model.Object) Copier {
+	return &StaticObjectCopier{
+		database:  database,
+		storage:   storage,
+		container: container,
+		source:    object,
+		object:    new(model.Object),
+	}
+}
+
+func (s *StaticObjectCopier) Copy(containername, objectname string) error {
+	if s.source.Size > 5<<30 {
+		return swift.TooLargeObject
+	}
+
+	container, err := s.database.FindContainerByName(containername)
+	if err != nil {
+		return errors.Wrap(err, "StaticObjectCopier")
+	}
+
+	//
+
+	s.object.ContainerID = container.ID
+	s.object.Key = objectname
+	s.object.ContentType = s.source.ContentType
+
+	//
+
+	wc, err := s.storage.Writer(container.Name, s.object.Key)
+	if err != nil {
+		return errors.Wrap(err, "StaticObjectCopier")
+	}
+	defer wc.Close()
+
+	h := md5.New()
+	w := io.MultiWriter(h, wc)
+
+	//
+
+	for _, segment := range s.source.Segments {
+		r, err := s.storage.Reader(segment.Container, segment.Object)
+		if err != nil {
+			return errors.Wrap(err, "StaticObjectCopier")
+		}
+
+		n, err := io.Copy(w, r)
+		r.Close()
+		if err != nil {
+			return errors.Wrap(err, "StaticObjectCopier")
+		}
+		s.object.Size += n
+	}
+	s.object.Checksum = hex.EncodeToString(h.Sum(nil))
+
+	if s.object.Size != s.source.Size {
+		return swift.ObjectCorrupted
+	}
+
+	err = s.database.Save(s.object)
+	return errors.Wrap(err, "StaticObjectCopier")
+}
+
+func (s *StaticObjectCopier) CreatedAt() time.Time {
+	return *s.object.CreatedAt
+}
+
+func (s *StaticObjectCopier) Checksum() string {
+	return s.object.Checksum
+}

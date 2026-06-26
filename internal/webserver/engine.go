@@ -108,6 +108,8 @@ func EchoEngine(ctrl Controller) *echo.Echo {
 			c.Set("object_source", c.Request().Header.Get("X-Copy-From"))
 			c.Set("object_destination", path.Join(c.Param("container"), c.Param("object")))
 			return object.Copy(c)
+		case c.QueryParam("multipart-manifest") == "put":
+			return object.StaticManifest(c)
 		case c.Request().Header.Get("X-Object-Manifest") != "":
 			return object.Manifest(c)
 		default:
