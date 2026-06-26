@@ -141,6 +141,24 @@ func (h *object) Download(c echo.Context) error {
 		c.Response().Header().Set("X-Delete-At", strconv.FormatInt(object.TTL.Unix(), 10))
 	}
 
+	// Evaluate If-Match / If-None-Match here rather than leaving them to
+	// http.ServeContent, whose strong comparison requires RFC-quoted ETags
+	// while Swift uses a bare MD5 hex digest.  Delete the headers afterwards
+	// so ServeContent does not reject the (unquoted) ETag.
+	etag := downloader.Checksum()
+	if im := c.Request().Header.Get("If-Match"); im != "" {
+		c.Request().Header.Del("If-Match")
+		if !etagMatches(im, etag) {
+			return c.NoContent(http.StatusPreconditionFailed)
+		}
+	}
+	if inm := c.Request().Header.Get("If-None-Match"); inm != "" {
+		c.Request().Header.Del("If-None-Match")
+		if etagMatches(inm, etag) {
+			return c.NoContent(http.StatusNotModified)
+		}
+	}
+
 	// http.ServeContent honors Range/If-Range/If-Modified-Since (replying with
 	// 206 Partial Content and Content-Range when applicable) as long as the
 	// body is seekable.  Single objects are backed by *os.File; multi-segment
@@ -156,6 +174,21 @@ func (h *object) Download(c echo.Context) error {
 
 	c.Response().Header().Set(echo.HeaderContentLength, strconv.FormatInt(downloader.Size(), 10))
 	return c.Stream(http.StatusOK, downloader.ContentType(), r)
+}
+
+// etagMatches reports whether a comma-separated If-Match / If-None-Match header
+// value matches the given (unquoted) ETag, tolerating surrounding quotes, an
+// optional weak prefix, and the "*" wildcard.
+func etagMatches(header, etag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		candidate = strings.TrimPrefix(candidate, "W/")
+		candidate = strings.Trim(candidate, `"`)
+		if candidate == "*" || candidate == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *object) Update(c echo.Context) error {
