@@ -98,6 +98,12 @@ func (c *strm) IsNotFound(err error) bool {
 func (c *strm) ListContainers() ([]*model.Container, error) {
 	containers := make([]*model.Container, 0)
 	err := c.db.AllByIndex("Name", &containers)
+	if c.IsNotFound(err) {
+		// Unlike All, AllByIndex returns ErrNotFound when the Container
+		// bucket does not exist yet, i.e. on a fresh database before the
+		// first Save.  Report an empty account instead of an error.
+		return containers, nil
+	}
 	return containers, errors.Wrap(err, "could not get all containers")
 }
 
