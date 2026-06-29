@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 	"github.com/mdouchement/logger"
 	"github.com/mdouchement/openstackswift/internal/database"
 	"github.com/mdouchement/openstackswift/internal/storage"
@@ -39,9 +38,18 @@ func EchoEngine(ctrl Controller) *echo.Echo {
 
 	engine.HTTPErrorHandler = middlewarepkg.NewHTTPErrorHandler(ctrl.Logger)
 
-	engine.Pre(middleware.Rewrite(map[string]string{
-		"/": "/version",
-	}))
+	// Serve the version document at the bare root.  A middleware.Rewrite rule of
+	// "/" matches every path ending in "/" -- echo anchors rewrite patterns only
+	// at the end -- which would rewrite trailing-slash object names such as
+	// "asdf/" to /version and break those keys, so rewrite the exact root only.
+	engine.Pre(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if c.Request().URL.Path == "/" {
+				c.Request().URL.Path = "/version"
+			}
+			return next(c)
+		}
+	})
 
 	//
 	//
