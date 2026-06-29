@@ -375,6 +375,15 @@ func (h *object) Upload(c echo.Context) error {
 		return weberror.New(http.StatusInternalServerError, err.Error())
 	}
 
+	// Swift validates a client-supplied ETag against the uploaded object's MD5
+	// and rejects a mismatch with 422 Unprocessable Entity.
+	if etag := c.Request().Header.Get("ETag"); etag != "" &&
+		!strings.EqualFold(strings.Trim(etag, `"`), object.Checksum) {
+		_ = h.storage.Remove(container.Name, object.Key)
+		return weberror.New(http.StatusUnprocessableEntity,
+			"the ETag did not match the object's MD5 checksum")
+	}
+
 	//
 
 	if err := h.db.Save(object); err != nil {
