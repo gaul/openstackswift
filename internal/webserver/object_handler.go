@@ -195,6 +195,15 @@ func (h *object) Download(c echo.Context) error {
 		}
 	}
 
+	// A byte range against an empty object (or one starting at or past the end)
+	// is unsatisfiable; reply 416 as S3/Swift do.  http.ServeContent serves an
+	// empty 200 for a range on a zero-length body instead.
+	if rangeUnsatisfiable(c.Request().Header.Get("Range"), downloader.Size()) {
+		c.Response().Header().Set("Content-Range",
+			"bytes */"+strconv.FormatInt(downloader.Size(), 10))
+		return c.NoContent(http.StatusRequestedRangeNotSatisfiable)
+	}
+
 	// http.ServeContent honors Range/If-Range/If-Modified-Since (replying with
 	// 206 Partial Content and Content-Range when applicable) as long as the
 	// body is seekable.  Single objects are backed by *os.File; multi-segment
@@ -229,6 +238,34 @@ func (h *object) Download(c echo.Context) error {
 	c.Response().Header().Set(echo.HeaderContentLength,
 		strconv.FormatInt(length, 10))
 	return c.Stream(status, downloader.ContentType(), body)
+}
+
+// rangeUnsatisfiable reports whether header is a single byte range that cannot
+// be satisfied for an object of the given size -- any range on an empty object,
+// or one starting at or past the end -- which warrants a 416 response.
+func rangeUnsatisfiable(header string, size int64) bool {
+	const prefix = "bytes="
+	if !strings.HasPrefix(header, prefix) {
+		return false
+	}
+	spec := strings.TrimPrefix(header, prefix)
+	if spec == "" || strings.ContainsRune(spec, ',') {
+		return false
+	}
+	dash := strings.IndexByte(spec, '-')
+	if dash < 0 {
+		return false
+	}
+	startStr := spec[:dash]
+	if startStr == "" {
+		// A "bytes=-N" suffix is unsatisfiable only against an empty object.
+		return size == 0
+	}
+	start, err := strconv.ParseInt(startStr, 10, 64)
+	if err != nil {
+		return false
+	}
+	return start >= size
 }
 
 // parseByteRange parses a single HTTP byte-range request ("bytes=a-b",
