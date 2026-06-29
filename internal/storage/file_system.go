@@ -184,7 +184,30 @@ func (b *fs) objectPath(container, object string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return secureJoin(root, object)
+	return secureJoin(root, encodeObjectName(object))
+}
+
+// encodeObjectName makes an object key safe to use as an on-disk path.
+//
+// Interior "/" are deliberately left intact and keep mirroring the directory
+// layout, so two keys where one is a directory prefix of the other ("foo/bar"
+// and "foo/bar/baz") still cannot coexist -- the same filesystem limitation as
+// the S3Proxy nio2 backend.  A *trailing* "/" is different: it would leave an
+// empty final path component that os.Create cannot create, so encode any
+// trailing slash run.  "%" is escaped first to keep the mapping unambiguous
+// (e.g. so a literal "asdf%2F" key never collides with "asdf/").  Listings are
+// served from the metadata database, not these names, so the encoding stays
+// internal to the storage backend.
+func encodeObjectName(object string) string {
+	if !strings.HasSuffix(object, "/") && !strings.Contains(object, "%") {
+		return object
+	}
+	object = strings.ReplaceAll(object, "%", "%25")
+	n := len(object)
+	for n > 0 && object[n-1] == '/' {
+		n--
+	}
+	return object[:n] + strings.Repeat("%2F", len(object)-n)
 }
 
 // secureJoin joins name onto root and verifies the cleaned result stays within
