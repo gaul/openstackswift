@@ -34,9 +34,14 @@ func (h *object) setHeadersFromMeta(c echo.Context, metas []*model.Meta) error {
 	return nil
 }
 
-// storeObjectMeta persists the request's X-Object-Meta-* headers as object
-// metadata.
+// storeObjectMeta replaces the object's user metadata with the request's
+// X-Object-Meta-* headers.  A PUT or POST sets the metadata wholesale, so any
+// metadata persisted by an earlier write is dropped first.
 func (h *object) storeObjectMeta(c echo.Context, containerID, objectKey string) error {
+	if err := h.db.DeleteAllMetas(containerID, objectKey); err != nil &&
+		!h.db.IsNotFound(err) {
+		return err
+	}
 	for key, values := range c.Request().Header {
 		if !strings.HasPrefix(key, "X-Object-Meta-") || len(values) == 0 {
 			continue
