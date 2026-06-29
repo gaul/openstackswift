@@ -54,8 +54,8 @@ func (h *object) storeObjectMeta(c echo.Context, containerID, objectKey string) 
 }
 
 // setContentHeaders returns the optional content-metadata headers stored with
-// the object (Content-Disposition, Content-Encoding), omitting any that are
-// unset.
+// the object (Content-Disposition, Content-Encoding, Cache-Control, Expires),
+// omitting any that are unset.
 func (h *object) setContentHeaders(c echo.Context, object *model.Object) {
 	if object == nil {
 		return
@@ -65,6 +65,12 @@ func (h *object) setContentHeaders(c echo.Context, object *model.Object) {
 	}
 	if object.ContentEncoding != "" {
 		c.Response().Header().Set("Content-Encoding", object.ContentEncoding)
+	}
+	if object.CacheControl != "" {
+		c.Response().Header().Set("Cache-Control", object.CacheControl)
+	}
+	if object.Expires != "" {
+		c.Response().Header().Set("Expires", object.Expires)
 	}
 }
 
@@ -289,6 +295,8 @@ func (h *object) Upload(c echo.Context) error {
 	}
 	object.ContentDisposition = c.Request().Header.Get("Content-Disposition")
 	object.ContentEncoding = c.Request().Header.Get("Content-Encoding")
+	object.CacheControl = c.Request().Header.Get("Cache-Control")
+	object.Expires = c.Request().Header.Get("Expires")
 	err = service.SetupObjectTTL(object, c.Request())
 	if err != nil {
 		return weberror.New(http.StatusInternalServerError, err.Error())
@@ -444,6 +452,8 @@ func (h *object) StaticManifest(c echo.Context) error {
 	}
 	object.ContentDisposition = c.Request().Header.Get("Content-Disposition")
 	object.ContentEncoding = c.Request().Header.Get("Content-Encoding")
+	object.CacheControl = c.Request().Header.Get("Cache-Control")
+	object.Expires = c.Request().Header.Get("Expires")
 	object.Size = size
 	object.Checksum = hex.EncodeToString(h5.Sum(nil))
 	object.Static = true

@@ -14,6 +14,8 @@ type Object struct {
 	ContentType        string    `json:"content_type"`
 	ContentDisposition string    `json:"content_disposition"`
 	ContentEncoding    string    `json:"content_encoding"`
+	CacheControl       string    `json:"cache_control"`
+	Expires            string    `json:"expires"`
 	Checksum           string    `json:"checksum"`
 	TTL                time.Time `json:"ttl"          storm:"index"`
 
