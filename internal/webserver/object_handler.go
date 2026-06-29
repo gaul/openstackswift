@@ -198,7 +198,7 @@ func (h *object) Download(c echo.Context) error {
 	// http.ServeContent honors Range/If-Range/If-Modified-Since (replying with
 	// 206 Partial Content and Content-Range when applicable) as long as the
 	// body is seekable.  Single objects are backed by *os.File; multi-segment
-	// manifests are not seekable and fall back to a full-body stream.
+	// manifests are not seekable and honor a single byte range by hand below.
 	if rs, ok := r.(io.ReadSeeker); ok {
 		modtime := time.Time{}
 		if object != nil && object.CreatedAt != nil {
@@ -208,8 +208,75 @@ func (h *object) Download(c echo.Context) error {
 		return nil
 	}
 
-	c.Response().Header().Set(echo.HeaderContentLength, strconv.FormatInt(downloader.Size(), 10))
-	return c.Stream(http.StatusOK, downloader.ContentType(), r)
+	// The body is not seekable, so honor a single byte range manually,
+	// mirroring http.ServeContent's 206 Partial Content / Content-Range reply.
+	size := downloader.Size()
+	body := io.Reader(r)
+	status := http.StatusOK
+	length := size
+	c.Response().Header().Set("Accept-Ranges", "bytes")
+	if start, end, ok := parseByteRange(c.Request().Header.Get("Range"), size); ok {
+		if _, err := io.CopyN(io.Discard, r, start); err != nil {
+			return weberror.New(http.StatusInternalServerError, err.Error())
+		}
+		body = io.LimitReader(r, end-start+1)
+		length = end - start + 1
+		status = http.StatusPartialContent
+		c.Response().Header().Set("Content-Range", "bytes "+
+			strconv.FormatInt(start, 10)+"-"+strconv.FormatInt(end, 10)+"/"+
+			strconv.FormatInt(size, 10))
+	}
+	c.Response().Header().Set(echo.HeaderContentLength,
+		strconv.FormatInt(length, 10))
+	return c.Stream(status, downloader.ContentType(), body)
+}
+
+// parseByteRange parses a single HTTP byte-range request ("bytes=a-b",
+// "bytes=a-", or "bytes=-suffix") against the object size, returning the
+// inclusive [start, end] bounds.  Multi-range, malformed, or unsatisfiable
+// ranges yield ok=false so the caller streams the whole object.
+func parseByteRange(header string, size int64) (start, end int64, ok bool) {
+	const prefix = "bytes="
+	if !strings.HasPrefix(header, prefix) || size <= 0 {
+		return 0, 0, false
+	}
+	spec := strings.TrimPrefix(header, prefix)
+	if strings.ContainsRune(spec, ',') {
+		return 0, 0, false
+	}
+	dash := strings.IndexByte(spec, '-')
+	if dash < 0 {
+		return 0, 0, false
+	}
+	startStr, endStr := spec[:dash], spec[dash+1:]
+	if startStr == "" {
+		n, err := strconv.ParseInt(endStr, 10, 64)
+		if err != nil || n <= 0 {
+			return 0, 0, false
+		}
+		if n > size {
+			n = size
+		}
+		return size - n, size - 1, true
+	}
+	start, err := strconv.ParseInt(startStr, 10, 64)
+	if err != nil || start < 0 || start >= size {
+		return 0, 0, false
+	}
+	end = size - 1
+	if endStr != "" {
+		end, err = strconv.ParseInt(endStr, 10, 64)
+		if err != nil {
+			return 0, 0, false
+		}
+		if end >= size {
+			end = size - 1
+		}
+	}
+	if end < start {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 // etagMatches reports whether a comma-separated If-Match / If-None-Match header
