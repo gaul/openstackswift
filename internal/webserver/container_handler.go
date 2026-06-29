@@ -72,7 +72,18 @@ func (h *container) Show(c echo.Context) error {
 
 	h.logger.Debugf("container Show: container %v limit=%v prefix=%v", c.Param("container"), limit, c.QueryParam("prefix"))
 
-	objects, err := h.db.FindObjectsByContainerID(container.ID, limit, c.QueryParam("prefix"), c.QueryParam("marker"))
+	// With a delimiter the limit applies to the collapsed listing (several
+	// objects can fold into one subdir), so fetch every matching object and
+	// let ObjectsWithDelimiter apply the marker and limit; limiting the raw
+	// objects first would return short pages and break truncation.
+	delimiter := c.QueryParam("delimiter")
+	marker := c.QueryParam("marker")
+	dbLimit := limit
+	if delimiter != "" {
+		dbLimit = -1
+	}
+
+	objects, err := h.db.FindObjectsByContainerID(container.ID, dbLimit, c.QueryParam("prefix"), marker)
 
 	/*
 	// Delimiter spliter maybe can be removed
@@ -113,14 +124,13 @@ func (h *container) Show(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	case http.MethodGet:
 		prefix := c.QueryParam("prefix")
-		delimiter := c.QueryParam("delimiter")
 
 		if c.Request().Header.Get("Accept") == "text/plain" {
 			return c.String(http.StatusOK, serializer.TextObjects(objects, prefix))
 		}
 		// "application/json"
-		return c.JSON(http.StatusOK,
-			serializer.ObjectsWithDelimiter(objects, prefix, delimiter))
+		return c.JSON(http.StatusOK, serializer.ObjectsWithDelimiter(
+			objects, prefix, delimiter, marker, limit))
 	}
 	return weberror.New(http.StatusNotFound, swift.BadRequest.Text)
 }

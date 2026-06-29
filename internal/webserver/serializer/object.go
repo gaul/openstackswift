@@ -21,7 +21,7 @@ func TextObjects(objects []*model.Object, prefix string) string {
 
 // Objects returns the serialized form of the given models.
 func Objects(objects []*model.Object, prefix string) []map[string]interface{} {
-	return ObjectsWithDelimiter(objects, prefix, "")
+	return ObjectsWithDelimiter(objects, prefix, "", "", -1)
 }
 
 // ObjectsWithDelimiter serializes the listing, applying Swift's delimiter
@@ -29,8 +29,14 @@ func Objects(objects []*model.Object, prefix string) []map[string]interface{} {
 // collapsed into deduplicated {"subdir": "<prefix + segment up to and
 // including the delimiter>"} entries, and only keys without the delimiter
 // are returned as objects.  An empty delimiter lists every object.
-func ObjectsWithDelimiter(objects []*model.Object, prefix, delimiter string) []map[string]interface{} {
-	sl := make([]map[string]interface{}, 0, len(objects))
+//
+// marker and limit apply to the *collapsed* listing (matching Swift): an
+// entry -- object or subdir -- is included only when it sorts after marker,
+// and at most limit entries are returned (limit < 0 means no limit).  The
+// caller must pass objects sorted by key with no per-object limit applied,
+// since several objects can fold into a single subdir entry.
+func ObjectsWithDelimiter(objects []*model.Object, prefix, delimiter, marker string, limit int) []map[string]interface{} {
+	sl := make([]map[string]interface{}, 0)
 	seen := make(map[string]bool)
 
 	for _, object := range objects {
@@ -38,19 +44,37 @@ func ObjectsWithDelimiter(objects []*model.Object, prefix, delimiter string) []m
 			continue
 		}
 
+		// The listing entry is a subdir when the key has the delimiter after
+		// the prefix, otherwise the object itself.
+		entry := object.Key
+		subdir := false
 		if delimiter != "" {
 			rest := object.Key[len(prefix):]
 			if idx := strings.Index(rest, delimiter); idx >= 0 {
-				subdir := prefix + rest[:idx+len(delimiter)]
-				if !seen[subdir] {
-					seen[subdir] = true
-					sl = append(sl, map[string]interface{}{"subdir": subdir})
-				}
-				continue
+				entry = prefix + rest[:idx+len(delimiter)]
+				subdir = true
 			}
 		}
 
-		sl = append(sl, Object(object))
+		// marker and limit compare and count entries (which may be subdirs),
+		// not raw object keys -- so a subdir whose group began at or before
+		// the marker is skipped, and folded objects don't consume the limit.
+		if marker != "" && entry <= marker {
+			continue
+		}
+		if subdir && seen[entry] {
+			continue
+		}
+		if limit >= 0 && len(sl) >= limit {
+			break
+		}
+
+		if subdir {
+			seen[entry] = true
+			sl = append(sl, map[string]interface{}{"subdir": entry})
+		} else {
+			sl = append(sl, Object(object))
+		}
 	}
 
 	return sl
