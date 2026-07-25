@@ -195,7 +195,11 @@ func (h *object) Upload(c echo.Context) error {
 		return weberror.New(http.StatusNotFound, swift.ContainerNotFound.Text)
 	}
 
-	//
+	// Swift supports conditional PUT via If-None-Match: * only, replying
+	// 412 Precondition Failed when the object already exists.
+	if c.Request().Header.Get("If-None-Match") == "*" && object != nil {
+		return c.NoContent(http.StatusPreconditionFailed)
+	}
 
 	if object == nil {
 		object = new(model.Object)
