@@ -184,6 +184,13 @@ func (h *container) Update(c echo.Context) error {
 // storeContainerMeta persists the request's X-Container-Meta-* headers and the
 // read/write access-control headers (X-Container-Read/Write) as container
 // metadata, so container ACLs survive a round-trip on both create and update.
+//
+// Each key is replaced rather than added to.  AddMeta always saves a new
+// record, so without the delete a second write left two rows for the one key
+// and a read answered with whichever row the store returned last -- ordered by
+// the random ID assigned on save, so clearing an ACL appeared to work only
+// about half the time.  Only the keys the request carries are touched, since a
+// Swift POST updates the metadata it names and leaves the rest alone.
 func (h *container) storeContainerMeta(c echo.Context, container *model.Container) error {
 	for key, values := range c.Request().Header {
 		if len(values) == 0 {
@@ -192,6 +199,10 @@ func (h *container) storeContainerMeta(c echo.Context, container *model.Containe
 		if !strings.HasPrefix(key, "X-Container-Meta-") &&
 			key != "X-Container-Read" && key != "X-Container-Write" {
 			continue
+		}
+		if err := h.db.DeleteMeta(container.ID, "", key); err != nil &&
+			!h.db.IsNotFound(err) {
+			return err
 		}
 		if _, err := h.db.AddMeta(container.ID, "", key, values[0]); err != nil {
 			return err

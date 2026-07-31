@@ -42,6 +42,43 @@ func TestUpdateMetaContainer(t *testing.T) {
 
 }
 
+// Writing a key twice must replace the first value rather than add to it.  The
+// store saves a new record per write, so without a delete the container kept
+// two rows for the one key and a read answered with whichever came back last --
+// ordered by the random ID assigned on save, which gave an even chance of
+// reading either.  Several containers run so that outcome cannot pass by luck.
+func TestUpdateMetaContainerReplacesPreviousValue(t *testing.T) {
+	c, cleanup := setup()
+	defer cleanup()
+
+	ctx := context.Background()
+	err := c.Authenticate(ctx)
+	assert.NoError(t, err)
+
+	for i := 0; i < 16; i++ {
+		name := fmt.Sprintf("Xcontainer%d", i)
+
+		// the ACL arrives on the create, the metadata on a later update
+		err = c.ContainerCreate(ctx, name, swift.Headers{"X-Container-Read": ".r:*"})
+		assert.NoError(t, err)
+		err = c.ContainerUpdate(ctx, name,
+			swift.Metadata{"color": "orange"}.ContainerHeaders())
+		assert.NoError(t, err)
+
+		// clearing the ACL and overwriting the metadata must both stick
+		err = c.ContainerUpdate(ctx, name, swift.Headers{"X-Container-Read": ""})
+		assert.NoError(t, err)
+		m := swift.Metadata{"color": "blue"}
+		err = c.ContainerUpdate(ctx, name, m.ContainerHeaders())
+		assert.NoError(t, err)
+
+		_, headers, err := c.Container(ctx, name)
+		assert.NoError(t, err)
+		assert.Equal(t, m, headers.ContainerMetadata())
+		assert.Empty(t, headers["X-Container-Read"])
+	}
+}
+
 func TestUpdateMetaObject(t *testing.T) {
 	c, cleanup := setup()
 	defer cleanup()
