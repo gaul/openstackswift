@@ -7,7 +7,15 @@ type Meta struct {
 	// container or object
 	ContainerID string    `json:"container_id" storm:"index"`
 	ObjectKey   string    `json:"object_key"   storm:"index"`
+	// OKey scopes ObjectKey to its container; see Object.CKey.  Several
+	// metas share one OKey, so the index is not unique.
+	OKey        string    `json:"okey"         storm:"index"`
 	// meta data key and value for the object
 	Key         string    `json:"key"          storm:"index"`
 	Value       string    `json:"value"`
+}
+
+// SyncKeys derives the index keys from the fields they scope.
+func (m *Meta) SyncKeys() {
+	m.OKey = ScopedKey(m.ContainerID, m.ObjectKey)
 }

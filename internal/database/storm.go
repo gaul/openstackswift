@@ -1,7 +1,8 @@
 package database
 
 import (
-	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/asdine/storm/v3"
@@ -76,6 +77,10 @@ func (c *strm) Save(m model.Model) error {
 		m.SetCreatedAt(t)
 	}
 
+	if k, ok := m.(model.Keyed); ok {
+		k.SyncKeys()
+	}
+
 	return errors.Wrap(c.db.Save(m), "could not save the model")
 }
 
@@ -118,8 +123,12 @@ func (c *strm) FindContainerByName(name string) (*model.Container, error) {
 }
 
 func (c *strm) DeleteContainer(id string) error {
-	err := c.db.Select(q.Eq("ID", id)).Delete(&model.Container{})
-	return errors.Wrap(err, "could not delete container")
+	var container model.Container
+	if err := c.db.One("ID", id, &container); err != nil {
+		return errors.Wrap(err, "could not delete container")
+	}
+	return errors.Wrap(c.db.DeleteStruct(&container),
+		"could not delete container")
 }
 
 //
@@ -137,23 +146,40 @@ func (c *strm) AllObjects() ([]*model.Object, error) {
 }
 
 func (c *strm) FindObjectsByContainerID(id string, limit int, prefix, marker string) ([]*model.Object, error) {
-	objects := make([]*model.Object, 0)
-	if (limit == 0) {
-		limit = -1
+	// Read the container's objects through the ContainerID index rather
+	// than scanning every object in the database, then apply the listing
+	// rules to that slice: prefix is a literal object-name prefix (Swift
+	// listing semantics), and marker returns only the keys sorting strictly
+	// after it, so the limit applies to the page that follows.
+	all := make([]*model.Object, 0)
+	err := c.db.Find("ContainerID", id, &all)
+	if err != nil {
+		if c.IsNotFound(err) {
+			return all, nil
+		}
+		return all, errors.Wrap(err, "could not get objects by container_id")
 	}
-	// prefix is a literal object-name prefix (Swift listing semantics), not a regexp,
-	// so escape any regexp metacharacters before anchoring it with "^".
-	matchers := []q.Matcher{
-		q.Eq("ContainerID", id),
-		q.Re("Key", "^" + regexp.QuoteMeta(prefix)),
+
+	objects := make([]*model.Object, 0, len(all))
+	for _, object := range all {
+		if object.ContainerID != id {
+			continue
+		}
+		if !strings.HasPrefix(object.Key, prefix) {
+			continue
+		}
+		if marker != "" && object.Key <= marker {
+			continue
+		}
+		objects = append(objects, object)
 	}
-	// marker (Swift listing pagination): return only objects whose key sorts
-	// strictly after it, so the limit applies to the page that follows.
-	if marker != "" {
-		matchers = append(matchers, q.Gt("Key", marker))
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Key < objects[j].Key
+	})
+	if limit > 0 && len(objects) > limit {
+		objects = objects[:limit]
 	}
-	err := c.db.Select(matchers...).Limit(limit).OrderBy("Key").Find(&objects)
-	return objects, errors.Wrap(err, "could not get objects by container_id")
+	return objects, nil
 }
 
 func (c *strm) FindObjectsByManifestID(id string) ([]*model.Object, error) {
@@ -162,15 +188,29 @@ func (c *strm) FindObjectsByManifestID(id string) ([]*model.Object, error) {
 	return objects, errors.Wrap(err, "could not get objects by manifest_id")
 }
 
+// Storm stores a list-index entry as value + "__" + id and looks one up by
+// that prefix, so a value another value extends -- "a" beside "a__b" -- finds
+// the wrong record.  Read the index for candidates, which narrows thousands
+// of objects to a handful, then confirm the fields it stands for.
 func (c *strm) FindObjectByKey(cid, key string) (*model.Object, error) {
-	var object model.Object
-	err := c.db.Select(q.Eq("ContainerID", cid), q.Eq("Key", key)).First(&object)
-	return &object, errors.Wrap(err, "could not find object")
+	candidates := make([]*model.Object, 0)
+	if err := c.db.Find("CKey", model.ScopedKey(cid, key), &candidates); err != nil {
+		return nil, errors.Wrap(err, "could not find object")
+	}
+	for _, object := range candidates {
+		if object.ContainerID == cid && object.Key == key {
+			return object, nil
+		}
+	}
+	return nil, errors.Wrap(storm.ErrNotFound, "could not find object")
 }
 
 func (c *strm) DeleteObject(id string) error {
-	err := c.db.Select(q.Eq("ID", id)).Delete(&model.Object{})
-	return errors.Wrap(err, "could not delete object")
+	var object model.Object
+	if err := c.db.One("ID", id, &object); err != nil {
+		return errors.Wrap(err, "could not delete object")
+	}
+	return errors.Wrap(c.db.DeleteStruct(&object), "could not delete object")
 }
 
 //
@@ -178,14 +218,25 @@ func (c *strm) DeleteObject(id string) error {
 //
 
 func (c *strm) FindManifestByKey(cid, key string) (*model.Manifest, error) {
-	var manifest model.Manifest
-	err := c.db.Select(q.Eq("ContainerID", cid), q.Eq("Key", key)).First(&manifest)
-	return &manifest, errors.Wrap(err, "could not find manifest")
+	candidates := make([]*model.Manifest, 0)
+	if err := c.db.Find("CKey", model.ScopedKey(cid, key), &candidates); err != nil {
+		return nil, errors.Wrap(err, "could not find manifest")
+	}
+	for _, manifest := range candidates {
+		if manifest.ContainerID == cid && manifest.Key == key {
+			return manifest, nil
+		}
+	}
+	return nil, errors.Wrap(storm.ErrNotFound, "could not find manifest")
 }
 
 func (c *strm) DeleteManifest(id string) error {
-	err := c.db.Select(q.Eq("ID", id)).Delete(&model.Manifest{})
-	return errors.Wrap(err, "could not delete manifest")
+	var manifest model.Manifest
+	if err := c.db.One("ID", id, &manifest); err != nil {
+		return errors.Wrap(err, "could not delete manifest")
+	}
+	return errors.Wrap(c.db.DeleteStruct(&manifest),
+		"could not delete manifest")
 }
 
 //
@@ -204,17 +255,48 @@ func (c *strm) AddMeta(cid, okey string, key string, value string) (*model.Meta,
 }
 
 func (c *strm) FindMeta(cid, okey string) ([]*model.Meta, error) {
-	var metas = make([]*model.Meta, 0)
-	err := c.db.Select(q.Eq("ContainerID", cid), q.Eq("ObjectKey", okey)).Find(&metas)
-	return metas, errors.Wrap(err, "could not find metas")
+	candidates := make([]*model.Meta, 0)
+	if err := c.db.Find("OKey", model.ScopedKey(cid, okey), &candidates); err != nil {
+		return nil, errors.Wrap(err, "could not find metas")
+	}
+	// see FindObjectByKey on why the index answers with candidates
+	metas := make([]*model.Meta, 0, len(candidates))
+	for _, meta := range candidates {
+		if meta.ContainerID == cid && meta.ObjectKey == okey {
+			metas = append(metas, meta)
+		}
+	}
+	if len(metas) == 0 {
+		return metas, errors.Wrap(storm.ErrNotFound, "could not find metas")
+	}
+	return metas, nil
 }
 
-func (c *strm) DeleteMeta(cid, okey string, key string) (error) {
-	err := c.db.Select(q.Eq("ContainerID", cid), q.Eq("ObjectKey", okey), q.Eq("Key", key)).Delete(&model.Meta{})
-	return errors.Wrap(err, "could not delete meta")
+func (c *strm) DeleteMeta(cid, okey string, key string) error {
+	metas, err := c.FindMeta(cid, okey)
+	if err != nil {
+		return errors.Wrap(err, "could not delete meta")
+	}
+	for _, meta := range metas {
+		if meta.Key != key {
+			continue
+		}
+		if err := c.db.DeleteStruct(meta); err != nil {
+			return errors.Wrap(err, "could not delete meta")
+		}
+	}
+	return nil
 }
 
-func (c *strm) DeleteAllMetas(cid, okey string) (error) {
-	err := c.db.Select(q.Eq("ContainerID", cid), q.Eq("ObjectKey", okey)).Delete(&model.Meta{})
-	return errors.Wrap(err, "could not delete all metas")
+func (c *strm) DeleteAllMetas(cid, okey string) error {
+	metas, err := c.FindMeta(cid, okey)
+	if err != nil {
+		return errors.Wrap(err, "could not delete all metas")
+	}
+	for _, meta := range metas {
+		if err := c.db.DeleteStruct(meta); err != nil {
+			return errors.Wrap(err, "could not delete all metas")
+		}
+	}
+	return nil
 }
