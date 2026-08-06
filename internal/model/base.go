@@ -21,6 +21,13 @@ type (
 		SetUpdatedAt(time.Time)
 	}
 
+	// A Keyed model derives index keys from its other fields, which Save
+	// refreshes before writing so that an index never disagrees with the
+	// fields it is built from.
+	Keyed interface {
+		SyncKeys()
+	}
+
 	// A Base contains the default model fields.
 	Base struct {
 		ID        string     `json:"uuid"       storm:"id"`
